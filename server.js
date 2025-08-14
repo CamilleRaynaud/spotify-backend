@@ -228,7 +228,6 @@
 // app.listen(PORT, "0.0.0.0", () =>
 //   console.log(`Server running on port ${PORT}`)
 // );
-
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -236,12 +235,13 @@ import querystring from "querystring";
 
 const app = express();
 
-// ⚡️ CORS pour expo
+// ⚡️ Middlewares
 app.use(
   cors({
-    origin: "*",
+    origin: "*", // à restreindre en prod
   })
 );
+app.use(express.json()); // pour lire les corps JSON envoyés par l'app mobile
 
 // Variables d'environnement
 const PORT = process.env.PORT || 3000;
@@ -249,7 +249,30 @@ const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 const REDIRECT_URI = process.env.APP_SCHEME + "/callback"; // ex: myapp://auth/callback
 
-// 1️⃣ Route pour lancer le login Spotify
+/**
+ * Fonction utilitaire pour échanger un code contre des tokens Spotify
+ */
+async function exchangeCodeForTokens(code, redirectUri) {
+  const response = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization:
+        "Basic " +
+        Buffer.from(CLIENT_ID + ":" + CLIENT_SECRET).toString("base64"),
+    },
+    body: querystring.stringify({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  const data = await response.json();
+  return data;
+}
+
+// 1️⃣ Route Web pour lancer le login Spotify
 app.get("/login", (req, res) => {
   const scope =
     "user-read-private user-read-email streaming user-modify-playback-state";
@@ -264,33 +287,20 @@ app.get("/login", (req, res) => {
   res.redirect(authUrl);
 });
 
-// 2️⃣ Callback Spotify
+// 2️⃣ Callback Web Spotify
 app.get("/callback", async (req, res) => {
   const code = req.query.code || null;
-
   if (!code) return res.status(400).send("No code provided");
 
   try {
-    const response = await fetch("https://accounts.spotify.com/api/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization:
-          "Basic " +
-          Buffer.from(CLIENT_ID + ":" + CLIENT_SECRET).toString("base64"),
-      },
-      body: querystring.stringify({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: REDIRECT_URI,
-      }),
-    });
+    const data = await exchangeCodeForTokens(code, REDIRECT_URI);
 
-    const data = await response.json();
+    if (data.error) {
+      console.error("Spotify error:", data);
+      return res.status(400).send(data.error_description || "Error");
+    }
 
-    // ⚡️ Ici tu peux sauvegarder data.access_token et data.refresh_token dans DB si besoin
-
-    // Redirection vers l'app mobile (écran selectPlaylists)
+    // Redirection vers l'app mobile après succès (version web)
     res.redirect(
       `${process.env.APP_SCHEME}/selectPlaylists?access_token=${data.access_token}&refresh_token=${data.refresh_token}`
     );
@@ -300,11 +310,38 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-// Route test simple
+// 3️⃣ Callback Mobile Spotify (utilisé par ton fetch React Native)
+app.post("/auth/spotify/callback", async (req, res) => {
+  const { code, redirectUri } = req.body;
+  if (!code || !redirectUri) {
+    return res.status(400).json({ error: "Missing code or redirectUri" });
+  }
+
+  try {
+    const data = await exchangeCodeForTokens(code, redirectUri);
+
+    if (data.error) {
+      return res.status(400).json(data);
+    }
+
+    // Réponse JSON directe pour ton app mobile
+    return res.json({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_in: data.expires_in,
+    });
+  } catch (err) {
+    console.error("Erreur Spotify token exchange :", err);
+    return res.status(500).json({ error: "Error exchanging token" });
+  }
+});
+
+// 4️⃣ Route test simple
 app.get("/", (req, res) => {
   res.send("Spotify auth backend OK");
 });
 
+// 🚀 Lancement serveur
 app.listen(PORT, () => {
   console.log(`Backend démarré sur port ${PORT}`);
 });
