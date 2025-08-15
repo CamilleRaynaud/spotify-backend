@@ -228,120 +228,57 @@
 // app.listen(PORT, "0.0.0.0", () =>
 //   console.log(`Server running on port ${PORT}`)
 // );
+
 import express from "express";
-import cors from "cors";
 import fetch from "node-fetch";
 import querystring from "querystring";
 
 const app = express();
 
-// ⚡️ Middlewares
-app.use(
-  cors({
-    origin: "*", // à restreindre en prod
-  })
-);
-app.use(express.json()); // pour lire les corps JSON envoyés par l'app mobile
+app.use(express.json()); // très important
+app.use(express.urlencoded({ extended: true }));
 
-// Variables d'environnement
-const PORT = process.env.PORT || 3000;
-const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
-const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-const REDIRECT_URI = process.env.APP_SCHEME + "/callback"; // ex: myapp://auth/callback
-
-/**
- * Fonction utilitaire pour échanger un code contre des tokens Spotify
- */
-async function exchangeCodeForTokens(code, redirectUri) {
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization:
-        "Basic " +
-        Buffer.from(CLIENT_ID + ":" + CLIENT_SECRET).toString("base64"),
-    },
-    body: querystring.stringify({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: redirectUri,
-    }),
-  });
-
-  const data = await response.json();
-  return data;
-}
-
-// 1️⃣ Route Web pour lancer le login Spotify
-app.get("/login", (req, res) => {
-  const scope =
-    "user-read-private user-read-email streaming user-modify-playback-state";
-  const authUrl =
-    "https://accounts.spotify.com/authorize?" +
-    querystring.stringify({
-      response_type: "code",
-      client_id: CLIENT_ID,
-      scope,
-      redirect_uri: REDIRECT_URI,
-    });
-  res.redirect(authUrl);
-});
-
-// 2️⃣ Callback Web Spotify
-app.get("/callback", async (req, res) => {
-  const code = req.query.code || null;
-  if (!code) return res.status(400).send("No code provided");
-
-  try {
-    const data = await exchangeCodeForTokens(code, REDIRECT_URI);
-
-    if (data.error) {
-      console.error("Spotify error:", data);
-      return res.status(400).send(data.error_description || "Error");
-    }
-
-    // Redirection vers l'app mobile après succès (version web)
-    res.redirect(
-      `${process.env.APP_SCHEME}/selectPlaylists?access_token=${data.access_token}&refresh_token=${data.refresh_token}`
-    );
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Error exchanging token");
-  }
-});
-
-// 3️⃣ Callback Mobile Spotify (utilisé par ton fetch React Native)
+const PORT = process.env.PORT;
 app.post("/auth/spotify/callback", async (req, res) => {
-  const { code, redirectUri } = req.body;
-  if (!code || !redirectUri) {
-    return res.status(400).json({ error: "Missing code or redirectUri" });
+  console.log("[backend spotify callback] req.body:", req.body);
+  const { code, redirectUri, code_verifier } = req.body;
+
+  if (!code || !redirectUri || !code_verifier) {
+    return res
+      .status(400)
+      .json({ error: "Missing code, redirectUri, or code_verifier" });
   }
 
   try {
-    const data = await exchangeCodeForTokens(code, redirectUri);
+    const response = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: querystring.stringify({
+        client_id: process.env.CLIENT_ID,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: redirectUri,
+        code_verifier,
+      }),
+    });
 
-    if (data.error) {
-      return res.status(400).json(data);
-    }
+    const data = await response.json();
+    if (data.error) return res.status(400).json(data);
 
-    // Réponse JSON directe pour ton app mobile
-    return res.json({
+    res.json({
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_in: data.expires_in,
     });
   } catch (err) {
     console.error("Erreur Spotify token exchange :", err);
-    return res.status(500).json({ error: "Error exchanging token" });
+    res.status(500).json({ error: "Error exchanging token" });
   }
 });
 
-// 4️⃣ Route test simple
-app.get("/", (req, res) => {
-  res.send("Spotify auth backend OK");
-});
-
-// 🚀 Lancement serveur
 app.listen(PORT, () => {
   console.log(`Backend démarré sur port ${PORT}`);
 });
