@@ -18,7 +18,7 @@ app.post("/auth/spotify/callback", async (req, res) => {
       .json({ error: "Missing code, redirectUri, or code_verifier" });
   }
 
-  console.log("[backend CLIENT_ID]:", process.env.CLIENT_ID);
+  console.log("[backend CLIENT_ID]:", process.env.SPOTIFY_CLIENT_ID);
   try {
     const response = await fetch("https://accounts.spotify.com/api/token", {
       method: "POST",
@@ -27,7 +27,7 @@ app.post("/auth/spotify/callback", async (req, res) => {
         Accept: "application/json",
       },
       body: querystring.stringify({
-        client_id: process.env.CLIENT_ID,
+        client_id: process.env.SPOTIFY_CLIENT_ID,
         grant_type: "authorization_code",
         code,
         redirect_uri: redirectUri,
